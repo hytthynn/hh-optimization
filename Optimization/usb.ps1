@@ -129,7 +129,12 @@ $allowScriptsCommand = 'cmd.exe /d /c powershell.exe -NoProfile -ExecutionPolicy
 $policyCommands = @($driverCommands) + @($updateCommands) + @($allowScriptsCommand)
 # Apply in specialize independently of SetupComplete (OEM-key restriction).
 $order = 0
-$specializeCommands = foreach ($command in $policyCommands) {
+$specializeAccountCommands = @(
+    'net accounts /maxpwage:unlimited'
+    "net user $userName /active:Yes"
+    "net user $userName /passwordreq:no"
+)
+$specializeCommands = foreach ($command in (@($policyCommands) + @($specializeAccountCommands))) {
     $order++
     '<RunSynchronousCommand wcm:action="add"><Order>{0}</Order><Description>Update and driver policy {0}</Description><Path>{1}</Path><WillReboot>Never</WillReboot></RunSynchronousCommand>' -f $order,(Escape-Xml $command)
 }
@@ -178,6 +183,34 @@ $xmlText = @"
       <SystemLocale>ru-RU</SystemLocale><UILanguage>ru-RU</UILanguage><UserLocale>ru-RU</UserLocale>
     </component>
     <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <RunSynchronous>
+                <RunSynchronousCommand wcm:action="add">
+                    <Order>1</Order>
+                    <Path>reg add "HKLM\SYSTEM\Setup\LabConfig" /v "BypassTPMCheck" /t REG_DWORD /d 1 /f</Path>
+                    <Description>Add BypassTPMCheck</Description>
+                </RunSynchronousCommand>
+                <RunSynchronousCommand wcm:action="add">
+                    <Order>2</Order>
+                    <Path>reg add "HKLM\SYSTEM\Setup\LabConfig" /v "BypassRAMCheck" /t REG_DWORD /d 1 /f</Path>
+                    <Description>Add BypassRAMCheck</Description>
+                </RunSynchronousCommand>
+                <RunSynchronousCommand wcm:action="add">
+                    <Order>3</Order>
+                    <Path>reg add "HKLM\SYSTEM\Setup\LabConfig" /v "BypassSecureBootCheck" /t REG_DWORD /d 1 /f</Path>
+                    <Description>Add BypassSecureBootCheck</Description>
+                </RunSynchronousCommand>
+                <RunSynchronousCommand wcm:action="add">
+                    <Order>4</Order>
+                    <Path>reg add "HKLM\SYSTEM\Setup\LabConfig" /v "BypassCPUCheck" /t REG_DWORD /d 1 /f</Path>
+                    <Description>Add BypassCPUCheck</Description>
+                </RunSynchronousCommand>
+                <RunSynchronousCommand wcm:action="add">
+                    <Order>5</Order>
+                    <Path>reg add "HKLM\SYSTEM\Setup\LabConfig" /v "BypassStorageCheck" /t REG_DWORD /d 1 /f</Path>
+                    <Description>Add BypassStorageCheck</Description>
+                </RunSynchronousCommand>
+            </RunSynchronous>
+      <Diagnostics><OptIn>false</OptIn></Diagnostics>
       <DynamicUpdate><Enable>false</Enable><WillShowUI>OnError</WillShowUI></DynamicUpdate>
       <ImageInstall><OSImage><InstallFrom><MetaData wcm:action="add"><Key>/IMAGE/INDEX</Key><Value>$imageIndex</Value></MetaData></InstallFrom><WillShowUI>OnError</WillShowUI></OSImage></ImageInstall>
       <UserData><AcceptEula>true</AcceptEula><ProductKey><Key>$genericProKey</Key><WillShowUI>OnError</WillShowUI></ProductKey></UserData>
@@ -194,6 +227,12 @@ $xmlText = @"
     <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <RunSynchronous>$($specializeCommands -join "`r`n")</RunSynchronous>
     </component>
+    <component name="Microsoft-Windows-Security-SPP-UX" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <SkipAutoActivation>true</SkipAutoActivation>
+    </component>
+    <component name="Microsoft-Windows-UnattendedJoin" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <Identification><JoinWorkgroup>WORKGROUP</JoinWorkgroup></Identification>
+    </component>
   </settings>
   <settings pass="oobeSystem">
     <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
@@ -202,8 +241,17 @@ $xmlText = @"
     </component>
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <TimeZone>Russian Standard Time</TimeZone>
-      <OOBE><HideEULAPage>true</HideEULAPage><HideOnlineAccountScreens>true</HideOnlineAccountScreens><HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE></OOBE>
-      <UserAccounts><LocalAccounts><LocalAccount wcm:action="add"><Name>$escapedUser</Name><DisplayName>$escapedUser</DisplayName><Group>Administrators</Group><Password><Value></Value><PlainText>true</PlainText></Password></LocalAccount></LocalAccounts></UserAccounts>
+      <OOBE>
+                <HideEULAPage>true</HideEULAPage>
+                <HideLocalAccountScreen>true</HideLocalAccountScreen>
+                <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+                <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+                <NetworkLocation>Home</NetworkLocation>
+                <ProtectYourPC>3</ProtectYourPC>
+                <SkipMachineOOBE>true</SkipMachineOOBE>
+                <SkipUserOOBE>true</SkipUserOOBE>
+            </OOBE>
+      <UserAccounts><AdministratorPassword><PlainText>true</PlainText><Value></Value></AdministratorPassword><LocalAccounts><LocalAccount wcm:action="add"><Name>$escapedUser</Name><DisplayName>$escapedUser</DisplayName><Group>Administrators</Group><Password><Value></Value><PlainText>true</PlainText></Password></LocalAccount></LocalAccounts></UserAccounts>
       <FirstLogonCommands><SynchronousCommand wcm:action="add"><Order>1</Order><Description>WinSux RU region and RU EN keyboard</Description><CommandLine>$(Escape-Xml $localeCommand)</CommandLine></SynchronousCommand></FirstLogonCommands>
     </component>
   </settings>

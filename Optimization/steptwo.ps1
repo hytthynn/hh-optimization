@@ -819,7 +819,8 @@ rundll32.exe user32.dll, UpdatePerUserSystemParameters
 # remove customize this folder
 cmd /c "reg add `"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer`" /v `"NoCustomizeThisFolder`" /t REG_DWORD /d `"1`" /f >nul 2>&1"
 
-# Preserve standard pin-to-Quick-access support.
+# remove pin to quick access
+cmd /c "reg delete `"HKCR\Folder\shell\pintohome`" /f >nul 2>&1"
 
 # remove add to favorites
 cmd /c "reg delete `"HKCR\*\shell\pintohomefile`" /f >nul 2>&1"
@@ -1344,26 +1345,15 @@ Apply-Setting 'Display never turns off on battery' { powercfg.exe /change monito
 
 # Requested Disable options from Ultimate 8 Advanced 2/3/4/5.
 # These deliberately reduce security. Do not stop/delete BFE or MpsSvc services.
-foreach ($profileName in @('DomainProfile','PublicProfile','StandardProfile')) {
-    Apply-Setting "Firewall disabled in registry: $profileName" {
-        Set-Dword HKLM "SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\$profileName" EnableFirewall 0
-    }
-}
-Apply-Setting 'Firewall disabled for all active profiles' {
-    $output = & netsh.exe advfirewall set allprofiles state off 2>&1
-    if ($LASTEXITCODE -ne 0) { throw ("netsh exit code ${LASTEXITCODE}: " + ($output -join ' ')) }
+Apply-Setting 'Firewall disabled (Ultimate method)' {
+cmd /c "reg add `"HKEY_LOCAL_MACHINE\System\ControlSet001\Services\SharedAccess\Parameters\FirewallPolicy\PublicProfile`" /v `"EnableFirewall`" /t REG_DWORD /d `"0`" /f >nul 2>&1"
+cmd /c "reg add `"HKEY_LOCAL_MACHINE\System\ControlSet001\Services\SharedAccess\Parameters\FirewallPolicy\StandardProfile`" /v `"EnableFirewall`" /t REG_DWORD /d `"0`" /f >nul 2>&1"
 }
 foreach ($mitigationName in @('FeatureSettingsOverrideMask','FeatureSettingsOverride')) {
     Apply-Setting "Spectre/Meltdown Disable: $mitigationName=3 (reboot required)" { Set-Dword HKLM 'SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' $mitigationName 3 }
 }
-Apply-Setting 'DEP boot policy AlwaysOff (reboot required)' {
-    $secureBoot = $false
-    try { $secureBoot = [bool](Confirm-SecureBootUEFI -ErrorAction Stop) } catch { Write-SettingStatus 'INFO' 'Secure Boot state unavailable (legacy BIOS or unsupported firmware).' }
-    if ($secureBoot) { throw 'Secure Boot is enabled: Windows can reject nx AlwaysOff. Secure Boot was NOT changed.' }
-    $output = & bcdedit.exe /set '{current}' nx AlwaysOff 2>&1
-    if ($LASTEXITCODE -ne 0) { throw ("bcdedit exit code ${LASTEXITCODE}: " + ($output -join ' ')) }
-    $boot = & bcdedit.exe /enum '{current}' 2>&1
-    if ($LASTEXITCODE -ne 0 -or ($boot -join ' ') -notmatch 'AlwaysOff') { throw 'DEP BCD read-back verification failed' }
+Apply-Setting 'DEP boot policy AlwaysOff (Ultimate method; reboot required)' {
+cmd /c "bcdedit /set nx AlwaysOff >nul 2>&1"
 }
 Apply-Setting 'Disable file-download security settings check' { Set-Dword HKLM 'SOFTWARE\Policies\Microsoft\Internet Explorer\Security' DisableSecuritySettingsCheck 1 }
 foreach ($hive in @('HKCU','HKLM')) {
