@@ -2,6 +2,11 @@
         If (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]"Administrator"))
         {Start-Process PowerShell.exe -ArgumentList ("-NoProfile -ExecutionPolicy Bypass -File `"{0}`"" -f $PSCommandPath) -Verb RunAs
         Exit}
+# Only stage headings are written directly to the console.
+# Suppress PowerShell success/error/warning/verbose/debug/information streams.
+# Progress output is disabled; terminating errors still stop their scope.
+. {
+$ProgressPreference = 'SilentlyContinue'
         $Host.UI.RawUI.WindowTitle = $myInvocation.MyCommand.Definition + " (Administrator)"
         $Host.UI.RawUI.BackgroundColor = "Black"
         $Host.PrivateData.ProgressBackgroundColor = "Black"
@@ -35,7 +40,7 @@
   		}
         }
 
-Write-Host "Defender: Disable...`n"
+[Console]::WriteLine("Defender: Disable...`n")
 
 $windowssecuritysettings = @(
 # virus & threat protection - manage settings
@@ -190,8 +195,9 @@ cmd /c "reg add `"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\P
 # remove safe mode boot
 cmd /c "bcdedit /deletevalue {current} safeboot >nul 2>&1"
 
-Write-Host "Restarting`n" -ForegroundColor Red
+[Console]::WriteLine("Restarting`n")
 
 # restart
 Start-Sleep -Seconds 5
 shutdown -r -t 00
+} *> $null

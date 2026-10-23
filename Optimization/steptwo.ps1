@@ -2,6 +2,11 @@
         If (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]"Administrator"))
         {Start-Process PowerShell.exe -ArgumentList ("-NoProfile -ExecutionPolicy Bypass -File `"{0}`"" -f $PSCommandPath) -Verb RunAs
         Exit}
+# Only stage headings are written directly to the console.
+# Suppress PowerShell success/error/warning/verbose/debug/information streams.
+# Progress output is disabled; terminating errors still stop their scope.
+. {
+$ProgressPreference = 'SilentlyContinue'
         $Host.UI.RawUI.WindowTitle = $myInvocation.MyCommand.Definition + " (Administrator)"
         $Host.UI.RawUI.BackgroundColor = "Black"
         $Host.PrivateData.ProgressBackgroundColor = "Black"
@@ -38,17 +43,20 @@
         # SCRIPT SILENT
         $progresspreference = 'silentlycontinue'
 
-        Write-Host "REMOVE EDGE BROWSER; KEEP WEBVIEW`n"
+        [Console]::WriteLine("REMOVE EDGE BROWSER; KEEP WEBVIEW`n")
 # BEGIN embedded Edge browser removal
 & {
-# Remove ONLY the Edge browser. Keep WebView, EdgeCore and shared EdgeUpdate.
+# Remove browser program trees and CURRENT user browser profiles. Keep shared WebView, EdgeCore and EdgeUpdate.
 $ErrorActionPreference = 'Stop'
-function Write-EdgeStatus([string]$Message) { Write-Host $Message }
+function Write-EdgeStatus([string]$Message) { # Detailed Edge status output disabled.
+}
 $edgeRoots = @(
-    $(if (${env:ProgramFiles(x86)}) { Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application' }),
-    $(if ($env:ProgramFiles) { Join-Path $env:ProgramFiles 'Microsoft\Edge\Application' }),
-    $(if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Microsoft\Edge\Application' })
-) | Where-Object { $_ } | Select-Object -Unique
+    foreach ($base in (@(${env:ProgramFiles(x86)},$env:ProgramFiles,$env:LOCALAPPDATA) | Where-Object { $_ } | Select-Object -Unique)) {
+        foreach ($browserFolder in @('Edge','Edge Beta','Edge Dev','Edge SxS')) {
+            Join-Path $base ('Microsoft\'+$browserFolder)
+        }
+    }
+) | Select-Object -Unique
 function Test-BrowserPath([string]$Path) {
     if (-not $Path) { return $false }
     $full = [IO.Path]::GetFullPath($Path)
@@ -79,7 +87,18 @@ function Remove-BrowserNode([string]$Path) {
         [IO.File]::Delete($Path)
     }
 }
-Write-EdgeStatus 'BEGIN browser removal; shared runtime/updater/core are excluded.'
+# Stop/delete only services whose binary path is inside an exact browser root.
+# In particular, do not stop/delete edgeupdate/edgeupdatem or msedgewebview2.exe.
+foreach ($service in @(Get-CimInstance Win32_Service -ErrorAction SilentlyContinue)) {
+    foreach ($root in $edgeRoots) {
+        if ([string]$service.PathName -and ([string]$service.PathName).IndexOf($root.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            Stop-Service -Name $service.Name -Force -ErrorAction SilentlyContinue
+            & sc.exe delete $service.Name | Out-Null
+            break
+        }
+    }
+}
+Write-EdgeStatus 'BEGIN browser and current-user profile removal; shared runtime/updater/core are excluded.'
 try {
     # Stop only msedge.exe from a known browser tree, never msedgewebview2.exe.
     foreach ($process in @(Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction SilentlyContinue)) {
@@ -97,7 +116,8 @@ try {
             }
         }
     }
-    foreach ($root in $edgeRoots) {
+    foreach ($browserRoot in $edgeRoots) {
+        $root = Join-Path $browserRoot 'Application'
         if (Test-Path -LiteralPath $root -PathType Container) {
             foreach ($version in Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^\d+(\.\d+){1,3}$' }) {
                 $setup = Join-Path $version.FullName 'Installer\setup.exe'
@@ -115,12 +135,12 @@ try {
         if (-not $candidate.UserInstall -and $arguments -notmatch '--system-level') { $arguments += ' --system-level' }
         try {
             # Direct executable invocation fixes the old cmd /c quoting bug.
-            $result = Start-Process -FilePath $candidate.Exe -ArgumentList $arguments.Trim() -Wait -PassThru
+            $result = Start-Process -FilePath $candidate.Exe -ArgumentList $arguments.Trim() -Wait -PassThru -WindowStyle Hidden
             Write-EdgeStatus ("Uninstaller exit=$($result.ExitCode); executable=$($candidate.Exe)")
         } catch { Write-EdgeStatus ('Uninstaller error: '+$_.Exception.Message) }
     }
     # Some Windows builds refuse force-uninstall. Bounded file fallback removes
-    # browser Application trees only, never Microsoft, EdgeCore, EdgeUpdate or WebView.
+    # exact browser roots only, never Microsoft, EdgeCore, EdgeUpdate or WebView.
     foreach ($process in @(Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction SilentlyContinue)) {
         if (Test-BrowserPath $process.ExecutablePath) { Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue }
     }
@@ -133,17 +153,17 @@ try {
                     if (($parentItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Refusing browser cleanup through parent reparse point: $ancestor" }
                     $ancestor = Split-Path -Parent $ancestor
                 }
-                Remove-BrowserNode $root; Write-EdgeStatus "Removed browser-only tree: $root" }
+                Remove-BrowserNode $root; Write-EdgeStatus "Removed browser-only tree and profile if present: $root" }
             catch { Write-EdgeStatus "ERROR deleting ${root}: $($_.Exception.Message)" }
         }
     }
     $remaining = @($edgeRoots | Where-Object { Test-Path -LiteralPath $_ })
     if ($remaining.Count) { throw ('Browser tree still exists (possibly partly removed): '+($remaining -join '; ')) }
     # Remove only shortcuts whose resolved target is a browser executable.
-    $shortcutFolders = @([Environment]::GetFolderPath('Desktop'),[Environment]::GetFolderPath('CommonDesktopDirectory'),[Environment]::GetFolderPath('Programs'),[Environment]::GetFolderPath('CommonPrograms'))
+    $shortcutFolders = @([Environment]::GetFolderPath('Desktop'),[Environment]::GetFolderPath('CommonDesktopDirectory'),[Environment]::GetFolderPath('Programs'),[Environment]::GetFolderPath('CommonPrograms'),(Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch'),(Join-Path $env:SystemRoot 'System32\config\systemprofile\AppData\Roaming\Microsoft\Internet Explorer\Quick Launch'))
     $shortcutShell = New-Object -ComObject WScript.Shell
     foreach ($folder in $shortcutFolders | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -Unique) {
-        foreach ($shortcut in Get-ChildItem -LiteralPath $folder -Filter '*Edge*.lnk' -File -ErrorAction SilentlyContinue) {
+        foreach ($shortcut in Get-ChildItem -LiteralPath $folder -Filter '*.lnk' -File -Recurse -ErrorAction SilentlyContinue) {
             $link = $shortcutShell.CreateShortcut($shortcut.FullName)
             if (Test-BrowserPath $link.TargetPath) { Remove-Item -LiteralPath $shortcut.FullName -Force }
         }
@@ -154,15 +174,121 @@ try {
         $policy.SetValue('Install{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}',0,[Microsoft.Win32.RegistryValueKind]::DWord)
         $policy.SetValue('Update{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}',0,[Microsoft.Win32.RegistryValueKind]::DWord)
     } finally { $policy.Dispose() }
-    Write-EdgeStatus 'DONE: known browser Application trees are absent. WebView, EdgeCore and EdgeUpdate directories were not removed. Browser profile data was not deleted.'
+    Write-EdgeStatus 'DONE: known browser roots and current-user profiles are absent. WebView, EdgeCore and EdgeUpdate directories were not removed.'
 } catch {
     Write-EdgeStatus ('ERROR: '+$_.Exception.Message+' | '+$_.ScriptStackTrace)
     Write-Warning ('Edge removal incomplete: '+$_.Exception.Message)
 }
+# Remove browser-only registrations; never remove common EdgeUpdate/WebView keys.
+function Test-BrowserCommand([string]$Command) {
+    if (-not $Command) { return $false }
+    foreach ($root in $edgeRoots) {
+        if ($Command.IndexOf($root.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase) -ge 0) { return $true }
+    }
+    return $false
+}
+function Remove-EdgeRegistryKey([string]$Path) {
+    if (Test-Path -LiteralPath $Path) {
+        Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+        Write-EdgeStatus ('Removed browser registry key: '+$Path)
+    }
+}
+try {
+    # Browser elevation services are distinct from the shared EdgeUpdate services.
+    foreach ($service in @(Get-CimInstance Win32_Service -ErrorAction Stop)) {
+        if (Test-BrowserCommand $service.PathName) {
+            Stop-Service -Name $service.Name -Force -ErrorAction SilentlyContinue
+            & sc.exe delete $service.Name | Out-Null
+            if ($LASTEXITCODE -ne 0) { Write-Warning ('Could not delete browser service: '+$service.Name) }
+        }
+    }
+    # Inspect actual actions: EdgeUpdate tasks are preserved, regardless of their name.
+    foreach ($task in @(Get-ScheduledTask -ErrorAction Stop)) {
+        $browserAction=$false; $otherAction=$false
+        foreach ($action in @($task.Actions)) {
+            if (Test-BrowserCommand ([string]$action.Execute)) { $browserAction=$true } else { $otherAction=$true }
+        }
+        if ($browserAction -and -not $otherAction) {
+            Unregister-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -Confirm:$false -ErrorAction Stop
+            Write-EdgeStatus ('Removed browser-only task: '+$task.TaskPath+$task.TaskName)
+        }
+    }
+} catch { Write-Warning ('Browser service/task cleanup incomplete: '+$_.Exception.Message) }
+try {
+    $softwareRoots=@('HKCU:\Software','HKLM:\SOFTWARE','HKLM:\SOFTWARE\WOW6432Node')
+    $browserMissing=(@($edgeRoots | Where-Object { Test-Path -LiteralPath $_ }).Count -eq 0)
+    if (-not $browserMissing) { throw 'Browser files remain; keep installation registrations for repair/uninstall.' }
+    foreach ($base in $softwareRoots) {
+        # Exact product names only: never use DisplayName -like '*Microsoft Edge*'.
+        $uninstall=Join-Path $base 'Microsoft\Windows\CurrentVersion\Uninstall'
+        if (Test-Path -LiteralPath $uninstall) {
+            foreach ($key in @(Get-ChildItem -LiteralPath $uninstall -ErrorAction Stop)) {
+                $entry=Get-ItemProperty -LiteralPath $key.PSPath -ErrorAction Stop
+                if ($entry.DisplayName -match '^Microsoft Edge(?: Beta| Dev| Canary)?$' -or $key.PSChildName -match '^Microsoft Edge(?: Beta| Dev| Canary)?$') {
+                    Remove-EdgeRegistryKey $key.PSPath
+                }
+            }
+        }
+        foreach ($relative in @('Microsoft\Windows\CurrentVersion\App Paths\msedge.exe','Clients\StartMenuInternet\Microsoft Edge','Microsoft\Edge')) {
+            Remove-EdgeRegistryKey (Join-Path $base $relative)
+        }
+        $registered=Join-Path $base 'RegisteredApplications'
+        if (Test-Path -LiteralPath $registered) {
+            $item=Get-Item -LiteralPath $registered -ErrorAction Stop
+            foreach ($name in @($item.GetValueNames())) {
+                if ($name -match '^Microsoft Edge(?: Beta| Dev| Canary)?$' -or [string]$item.GetValue($name) -match '(?i)\\StartMenuInternet\\Microsoft Edge(?: Beta| Dev| Canary)?\\Capabilities$') {
+                    Remove-ItemProperty -LiteralPath $registered -Name $name -Force -ErrorAction Stop
+                }
+            }
+        }
+        # Active Setup entries only if the executable belongs to a browser tree.
+        $active=Join-Path $base 'Microsoft\Active Setup\Installed Components'
+        if (Test-Path -LiteralPath $active) {
+            foreach ($key in @(Get-ChildItem -LiteralPath $active -ErrorAction Stop)) {
+                $entry=Get-ItemProperty -LiteralPath $key.PSPath -ErrorAction Stop
+                if (Test-BrowserCommand ([string]$entry.StubPath)) { Remove-EdgeRegistryKey $key.PSPath }
+            }
+        }
+        foreach ($branch in @('Microsoft\Windows\CurrentVersion\Run','Microsoft\Windows\CurrentVersion\RunOnce')) {
+            $path=Join-Path $base $branch
+            if (Test-Path -LiteralPath $path) {
+                $item=Get-Item -LiteralPath $path -ErrorAction Stop
+                foreach ($name in @($item.GetValueNames())) {
+                    if (Test-BrowserCommand ([string]$item.GetValue($name))) { Remove-ItemProperty -LiteralPath $path -Name $name -Force -ErrorAction Stop }
+                }
+            }
+        }
+        # Stable Edge browser product GUID only; shared updater and WebView product stay.
+        foreach ($branch in @('Clients','ClientState','ClientStateMedium')) {
+            Remove-EdgeRegistryKey (Join-Path $base ('Microsoft\EdgeUpdate\'+$branch+'\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}'))
+        }
+        Remove-EdgeRegistryKey (Join-Path $base 'Microsoft\Windows\CurrentVersion\Explorer\Browser Helper Objects\{1FD49718-1D00-4B19-AF5F-070AF6D5D54C}')
+    }
+    foreach ($classes in @('HKCU:\Software\Classes','HKLM:\SOFTWARE\Classes','HKLM:\SOFTWARE\WOW6432Node\Classes')) {
+        if (Test-Path -LiteralPath $classes) {
+            foreach ($key in @(Get-ChildItem -LiteralPath $classes -ErrorAction Stop)) {
+                if ($key.PSChildName -match '^MSEdge(?:HTM|PDF)(?:\..+)?$') { Remove-EdgeRegistryKey $key.PSPath }
+            }
+        }
+        Remove-EdgeRegistryKey (Join-Path $classes 'Applications\msedge.exe')
+    }
+    Write-EdgeStatus 'Browser registration cleanup completed. Protected UserChoice associations were not modified; select another default browser in Settings.'
+} catch { Write-Warning ('Browser registry cleanup incomplete: '+$_.Exception.Message) }
+# Legacy Edge is a separate browser package, not Microsoft Edge WebView2 Runtime.
+try {
+    $legacy=@(Get-AppxPackage -AllUsers -Name 'Microsoft.MicrosoftEdge' -ErrorAction Stop)
+    foreach ($package in $legacy) {
+        Remove-AppxPackage -Package $package.PackageFullName -AllUsers -ErrorAction Stop
+    }
+    foreach ($package in @(Get-AppxProvisionedPackage -Online -ErrorAction Stop | Where-Object { $_.DisplayName -eq 'Microsoft.MicrosoftEdge' })) {
+        Remove-AppxProvisionedPackage -Online -PackageName $package.PackageName -ErrorAction Stop | Out-Null
+    }
+} catch { Write-Warning ('Legacy Edge package removal unavailable/incomplete: '+$_.Exception.Message) }
+Write-EdgeStatus 'Edge cleanup stage finished. Shared WebView, EdgeCore, EdgeUpdate services/tasks and other users profiles were intentionally preserved. Review any warnings above.'
 }
 # END embedded Edge browser removal
 
-        Write-Host "REMOVE UWP APPS`n"
+        [Console]::WriteLine("REMOVE UWP APPS`n")
         ## ms-settings:appsfeatures
         ## powershell -noexit -command "get-appxpackage | select name | format-table -autosize"
 
@@ -198,7 +324,7 @@ $_.Name -notlike '*NVIDIACorp.NVIDIAControlPanel*' -and
 $_.Name -notlike '*windows.immersivecontrolpanel*'
 } | Remove-AppxPackage -ErrorAction SilentlyContinue
 
-        Write-Host "REMOVE UWP FEATURES`n"
+        [Console]::WriteLine("REMOVE UWP FEATURES`n")
         ## ms-settings:optionalfeatures
         ## powershell -noexit -command "dism /online /get-capabilities /format:table"
 
@@ -224,7 +350,7 @@ Remove-WindowsCapability -Online -Name $_.Name | Out-Null
 } catch { }
 }
 
-        Write-Host "REMOVE LEGACY FEATURES`n"
+        [Console]::WriteLine("REMOVE LEGACY FEATURES`n")
         ## c:\windows\system32\optionalfeatures.exe
 		## powershell -noexit -command "dism /online /get-features /format:table"
 
@@ -259,7 +385,7 @@ Disable-WindowsOptionalFeature -Online -FeatureName $_.FeatureName -NoRestart -W
 } catch { }
 }
 
-		Write-Host "REMOVE LEGACY APPS`n"
+		[Console]::WriteLine("REMOVE LEGACY APPS`n")
 		## appwiz.cpl
 
 # uninstall brlapi
@@ -397,7 +523,7 @@ Get-ChildItem $tasksPath | Where-Object { $_.Name -ne "Microsoft" -and $_.Name -
 Remove-Item $_.FullName -Recurse -Force
 }
 
-        Write-Host "STORE SETTINGS`n"
+        [Console]::WriteLine("STORE SETTINGS`n")
         ## ms-windows-store:settings
 
 # open store settings page so disable personalized experiences on ms account sticks
@@ -445,7 +571,7 @@ Start-Sleep -Seconds 2
 reg unload "HKLM\Settings" >$null 2>&1
 }
 
-		Write-Host "WINDOWS SETTINGS`n"
+		[Console]::WriteLine("WINDOWS SETTINGS`n")
 		## regedit
 		## control
         ## ms-settings:
@@ -942,7 +1068,7 @@ Set-ItemProperty -Path "registry::$setreg" -Name 'IsPromoted' -Value 1 -Force
 Stop-Process -Force -Name explorer -ErrorAction SilentlyContinue | Out-Null
 Start-Sleep -Seconds 10
 
-        Write-Host "POWER PLAN`n"
+        [Console]::WriteLine("POWER PLAN`n")
         ## powercfg.cpl
 
 # import ultimate power plan
@@ -1159,7 +1285,7 @@ powercfg /setdcvalueindex 99999999-9999-9999-9999-999999999999 de830923-a562-41a
 powercfg /setdcvalueindex scheme_current sub_none consolelock 0 2>$null
 powercfg /setacvalueindex scheme_current sub_none consolelock 0 2>$null
 
-        Write-Host "TIMER RESOLUTION`n"
+        [Console]::WriteLine("TIMER RESOLUTION`n")
         ## services.msc
 
 # compile and create service
@@ -1191,6 +1317,7 @@ Get-AppxPackage -allusers *MSTeams* | Remove-AppxPackage -ErrorAction SilentlyCo
 Get-AppxPackage -allusers *Microsoft.OutlookForWindows* | Remove-AppxPackage -ErrorAction SilentlyContinue
 
 		# Apply requested overrides after the original settings/power plan, before cleanup.
+[Console]::WriteLine("PERSONAL AND ADVANCED SETTINGS`n")
 # BEGIN embedded personal and advanced settings
 & {
 # Final overrides for the TARGET Windows. Never run as a diagnostic on the host.
@@ -1389,6 +1516,7 @@ Write-SettingStatus 'END' ("Failed operations: $script:hhFailures. Explorer and 
 if ($script:hhFailures -gt 0) { Write-Warning "$script:hhFailures requested operations failed. Details were printed above; no log files are saved." }
 }
 # END embedded personal and advanced settings
+[Console]::WriteLine("PROJECT CLEANUP`n")
 # BEGIN final cleanup of project-owned artifacts (last stage only)
 & {
 $ErrorActionPreference = 'Stop'
@@ -1494,7 +1622,7 @@ try {
 }
 # END final cleanup of project-owned artifacts
 
-Write-Host "DISK CLEANUP`n"
+[Console]::WriteLine("DISK CLEANUP`n")
 		## cleanmgr.exe
 		## %temp%
 		## temp
@@ -1522,8 +1650,9 @@ cleanmgr.exe /autoclean /d C:
 
 # Restore point creation deliberately omitted.
 
-        Write-Host "RESTARTING`n" -ForegroundColor Red
+        [Console]::WriteLine("RESTARTING`n")
 
 # restart
 Start-Sleep -Seconds 5
 shutdown -r -t 00
+} *> $null

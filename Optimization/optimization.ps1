@@ -35,6 +35,11 @@ if (-not $hhIsAdmin) {
 # Continue after elevation without an additional APPLY prompt.
 
 
+# Only stage headings are written directly to the console.
+# Suppress PowerShell success/error/warning/verbose/debug/information streams.
+# Progress output is disabled; terminating errors still stop their scope.
+. {
+$ProgressPreference = 'SilentlyContinue'
         $Host.UI.RawUI.WindowTitle = $myInvocation.MyCommand.Definition + " (Administrator)"
         $Host.UI.RawUI.BackgroundColor = "Black"
         $Host.PrivateData.ProgressBackgroundColor = "Black"
@@ -51,7 +56,7 @@ if (-not $hhIsAdmin) {
         # SCRIPT SILENT
         $progresspreference = 'silentlycontinue'
 
-        Write-Host "DL`n"
+        [Console]::WriteLine("DL`n")
 		## explorer "https://github.com/hytthynn/hh-optimization/tree/main/Optimization"
 
 # Stage this local customized build. Never download upstream scripts over these files.
@@ -79,14 +84,14 @@ if ($sourcePackage -and (Split-Path -Leaf $sourcePackage) -match '^[a-f0-9]{32}$
     [IO.File]::WriteAllText((Join-Path $runtime 'source-package.path'),$sourcePackage,[Text.UTF8Encoding]::new($false))
 }
 
-        Write-Host "7Z`n"
+        [Console]::WriteLine("7Z`n")
         ## explorer "https://www.7-zip.org" 
 
 # download 7zip
 IWR "https://github.com/hytthynn/hh-optimization/releases/download/Files/7zip.exe" -OutFile "$env:ProgramData\hh-optimization\Runtime\7zip.exe"
 
 # install 7zip
-Start-Process -Wait "$env:ProgramData\hh-optimization\Runtime\7zip.exe" -ArgumentList "/S"
+Start-Process -Wait "$env:ProgramData\hh-optimization\Runtime\7zip.exe" -ArgumentList "/S" -WindowStyle Hidden
 
 # set config for 7zip
 cmd /c "reg add `"HKEY_CURRENT_USER\Software\7-Zip\Options`" /v `"ContextMenu`" /t REG_DWORD /d `"259`" /f >nul 2>&1"
@@ -96,7 +101,7 @@ cmd /c "reg add `"HKEY_CURRENT_USER\Software\7-Zip\Options`" /v `"CascadedMenu`"
 Move-Item -Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\7-Zip\7-Zip File Manager.lnk" -Destination "$env:ProgramData\Microsoft\Windows\Start Menu\Programs" -Force -ErrorAction SilentlyContinue | Out-Null
 Remove-Item "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\7-Zip" -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
 
-        Write-Host "C++`n"
+        [Console]::WriteLine("C++`n")
 		## explorer "https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170"
 
 # download c++
@@ -129,7 +134,7 @@ Start-Process -Wait "$env:ProgramData\hh-optimization\Runtime\vcredist2015_2017_
 
 # DDU removed from this build.
 
-        Write-Host "HELIUM`n"
+        [Console]::WriteLine("HELIUM`n")
         ## explorer "https://helium.computer"
 
 # download helium
@@ -165,7 +170,7 @@ Get-ScheduledTask | Where-Object { $_.TaskName -like '*Helium*' } | Unregister-S
 # cleaner start menu shortcut path
 Move-Item -Path "$env:AppData\Microsoft\Windows\Start Menu\Programs\Helium.lnk" -Destination "$env:ProgramData\Microsoft\Windows\Start Menu\Programs" -Force -ErrorAction SilentlyContinue | Out-Null
 
-        Write-Host "DIRECTX`n"
+        [Console]::WriteLine("DIRECTX`n")
         ## explorer "https://www.microsoft.com/en-au/download/details.aspx?id=35"
 
 # download directx
@@ -177,7 +182,7 @@ IWR "https://github.com/hytthynn/hh-optimization/releases/download/Files/directx
 # install directx
 Start-Process -Wait "$env:ProgramData\hh-optimization\Runtime\directx\DXSETUP.exe" -ArgumentList "/silent" -WindowStyle Hidden
 
-        Write-Host "REMOVEUWP`n"
+        [Console]::WriteLine("REMOVEUWP`n")
         ## ms-settings:appsfeatures
         ## powershell -noexit -command "get-appxpackage | select name | format-table -autosize"
 
@@ -227,8 +232,9 @@ cmd /c "reg add `"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce`" /v `"
 # turn on safe boot
 cmd /c "bcdedit /set {current} safeboot minimal >nul 2>&1"
 
-        Write-Host "RESTARTING`n" -ForegroundColor Red
+        [Console]::WriteLine("RESTARTING`n")
 
 # restart
 Start-Sleep -Seconds 5
 shutdown -r -t 00
+} *> $null
